@@ -49,7 +49,10 @@ Email validation endpoint for Ory Kratos.
 ```
 
 **Success Response** (HTTP 200):
-Email is valid, flow continues.
+```json
+{}
+```
+Email is valid, registration flow continues.
 
 **Error Response** (HTTP 400):
 ```json
@@ -75,5 +78,5 @@ Email is valid, flow continues.
 2. **Webhook Called**: Kratos sends email to this webhook for validation
 3. **Validation**: Service checks if email domain is disposable
 4. **Response**:
-   - If valid → HTTP 200 → Registration continues
+   - If valid → HTTP 200 with `{}` → Registration continues
    - If disposable → HTTP 400 with error → Registration blocked with error message
