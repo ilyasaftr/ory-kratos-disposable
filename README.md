@@ -21,8 +21,8 @@ selfservice:
                   X-API-Key: your-secret-api-key-change-me
                 body: base64://ZnVuY3Rpb24oY3R4KSBjdHguaWRlbnRpdHkudHJhaXRzLmVtYWls
                 response:
-                  ignore: true
-                  parse: false
+                  ignore: false
+                  parse: true
 ```
 
 ### Body Payload (JSONNET)
