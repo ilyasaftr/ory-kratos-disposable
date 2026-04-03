@@ -157,6 +157,8 @@ jobs:
       - name: Download digest artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: digest-*
+          merge-multiple: true
           path: /tmp/digests
 
       - name: Login to GHCR
@@ -174,8 +176,8 @@ jobs:
           IMAGE: ${{ needs.prepare.outputs.image }}
           TAGS: ${{ needs.prepare.outputs.tags }}
         run: |
-          AMD_DIGEST="$(cat /tmp/digests/digest-amd64/amd64.txt)"
-          ARM_DIGEST="$(cat /tmp/digests/digest-arm64/arm64.txt)"
+          AMD_DIGEST="$(cat /tmp/digests/amd64.txt)"
+          ARM_DIGEST="$(cat /tmp/digests/arm64.txt)"
 
           IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
           for tag in "${TAG_ARRAY[@]}"; do
