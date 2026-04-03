@@ -128,13 +128,12 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/${{ matrix.arch }}
-          push: ${{ needs.prepare.outputs.do_push == 'true' }}
+          push: true
           outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-          tags: ${{ needs.prepare.outputs.image }}:build-${{ github.sha }}-${{ matrix.arch }}
 
       - name: Export digest
         if: needs.prepare.outputs.do_push == 'true'
