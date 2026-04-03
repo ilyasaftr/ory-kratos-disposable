@@ -15,7 +15,7 @@ selfservice:
           hooks:
             - hook: web_hook
               config:
-                url: http://localhost:8080/v1/validate
+                url: http://localhost:8080/v1/validate/email
                 method: POST
                 headers:
                   X-API-Key: your-secret-api-key-change-me
@@ -38,6 +38,12 @@ function(ctx) {
 ### POST /v1/validate/email
 
 Email validation endpoint for Ory Kratos.
+
+### Failure Mode
+
+`DISPOSABLE_FAILURE_MODE` controls behavior when the disposable list has not been loaded yet:
+- `open` (default): allow requests during degraded mode.
+- `closed`: block requests during degraded mode.
 
 **Headers**:
 - `X-API-Key`: Your API key (required)

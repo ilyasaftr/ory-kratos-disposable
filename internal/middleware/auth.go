@@ -2,12 +2,13 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
-	"github.com/ilyasaftr/ory-kratos-disposable/internal/domain"
+	"github.com/ilyasaftr/ory-kratos-disposable/internal/httpx"
 )
+
+const apiKeyHeader = "X-API-Key"
 
 type AuthMiddleware struct {
 	apiKey string
@@ -24,14 +25,16 @@ func NewAuthMiddleware(apiKey string, log *slog.Logger) *AuthMiddleware {
 // Authenticate wraps a handler with API key authentication
 func (m *AuthMiddleware) Authenticate(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		apiKey := r.Header.Get("X-API-Key")
+		apiKey := r.Header.Get(apiKeyHeader)
 
 		if apiKey == "" {
 			m.logger.Warn("missing API key",
 				slog.String("path", r.URL.Path),
 				slog.String("method", r.Method),
 				slog.String("ip", r.RemoteAddr))
-			respondError(w, http.StatusUnauthorized, "Missing API key")
+			if err := httpx.WriteOryError(w, http.StatusUnauthorized, "Missing API key"); err != nil {
+				m.logger.Error("failed to write auth error response", slog.Any("error", err))
+			}
 			return
 		}
 
@@ -40,33 +43,12 @@ func (m *AuthMiddleware) Authenticate(next http.HandlerFunc) http.HandlerFunc {
 				slog.String("path", r.URL.Path),
 				slog.String("method", r.Method),
 				slog.String("ip", r.RemoteAddr))
-			respondError(w, http.StatusUnauthorized, "Invalid API key")
+			if err := httpx.WriteOryError(w, http.StatusUnauthorized, "Invalid API key"); err != nil {
+				m.logger.Error("failed to write auth error response", slog.Any("error", err))
+			}
 			return
 		}
 
 		next(w, r)
 	}
-}
-
-// respondError sends a JSON error response
-func respondError(w http.ResponseWriter, statusCode int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	resp := domain.OryWebhookResponse{
-		Messages: []domain.MessageGroup{
-			{
-				InstancePtr: "#/",
-				Messages: []domain.Message{
-					{
-						ID:   statusCode,
-						Text: message,
-						Type: "error",
-					},
-				},
-			},
-		},
-	}
-
-	json.NewEncoder(w).Encode(resp)
 }

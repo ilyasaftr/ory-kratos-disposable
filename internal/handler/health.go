@@ -4,16 +4,18 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-
-	"github.com/ilyasaftr/ory-kratos-disposable/internal/service"
 )
 
 type HealthHandler struct {
-	disposableService *service.DisposableEmailService
+	disposableService ReadinessChecker
 	logger            *slog.Logger
 }
 
-func NewHealthHandler(svc *service.DisposableEmailService, log *slog.Logger) *HealthHandler {
+type ReadinessChecker interface {
+	IsReady() bool
+}
+
+func NewHealthHandler(svc ReadinessChecker, log *slog.Logger) *HealthHandler {
 	return &HealthHandler{
 		disposableService: svc,
 		logger:            log,

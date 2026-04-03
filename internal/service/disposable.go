@@ -18,6 +18,7 @@ import (
 type DisposableEmailService struct {
 	listURLs        []string
 	refreshInterval time.Duration
+	failureMode     domain.FailureMode
 	logger          *slog.Logger
 	httpClient      *http.Client
 
@@ -28,10 +29,11 @@ type DisposableEmailService struct {
 	etags       map[string]string
 }
 
-func NewDisposableEmailService(listURLs []string, refreshInterval time.Duration, log *slog.Logger) *DisposableEmailService {
+func NewDisposableEmailService(listURLs []string, refreshInterval time.Duration, failureMode domain.FailureMode, log *slog.Logger) *DisposableEmailService {
 	return &DisposableEmailService{
 		listURLs:        listURLs,
 		refreshInterval: refreshInterval,
+		failureMode:     failureMode,
 		logger:          log,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -41,14 +43,19 @@ func NewDisposableEmailService(listURLs []string, refreshInterval time.Duration,
 	}
 }
 
-// Start initializes the service and starts the auto-refresh goroutine
-// The service always starts even if initial load fails (fail mode)
+// Start initializes the service and starts the auto-refresh goroutine.
+// The service always starts even if initial load fails (degraded mode).
 func (s *DisposableEmailService) Start(ctx context.Context) error {
+	if s.refreshInterval <= 0 {
+		return fmt.Errorf("refresh interval must be greater than 0")
+	}
+
 	// Try initial load
 	if err := s.refresh(); err != nil {
 		// Always allow service to start in degraded mode
-		s.logger.Warn("failed initial load - starting in FAIL mode (allowing all)",
+		s.logger.Warn("failed initial load - starting in degraded mode",
 			slog.Any("error", err),
+			slog.String("failure_mode", s.failureMode.String()),
 			slog.Int("urls_tried", len(s.listURLs)))
 		// isReady stays false, but service still starts
 		go s.autoRefresh(ctx)
@@ -207,10 +214,11 @@ func (s *DisposableEmailService) handleAllRefreshFailures(lastErr error) {
 			slog.Duration("data_age", oldDuration),
 			slog.Time("last_successful_refresh", lastRefresh))
 	} else {
-		// Never successfully loaded - degraded mode (always allowing)
-		s.logger.Error("all disposable URLs failed - RUNNING IN DEGRADED MODE (allowing all)",
+		// Never successfully loaded - degraded mode
+		s.logger.Error("all disposable URLs failed - RUNNING IN DEGRADED MODE",
 			slog.Any("error", lastErr),
-			slog.Int("urls_tried", len(s.listURLs)))
+			slog.Int("urls_tried", len(s.listURLs)),
+			slog.String("failure_mode", s.failureMode.String()))
 	}
 }
 
@@ -257,11 +265,19 @@ func (s *DisposableEmailService) IsDisposable(email string) (bool, string, error
 	s.mu.RUnlock()
 
 	if !ready {
-		// Never successfully loaded data - always fail (allow request)
-		s.logger.Warn("service not ready - allowing request (fail mode)",
+		if s.failureMode == domain.FailureModeOpen {
+			// Never successfully loaded data - allow request
+			s.logger.Warn("service not ready - allowing request (fail-open mode)",
+				slog.String("email", email),
+				slog.String("domain", emailDomain))
+			return false, emailDomain, nil // false = not disposable = ALLOW
+		}
+
+		// Never successfully loaded data - block request
+		s.logger.Warn("service not ready - blocking request (fail-closed mode)",
 			slog.String("email", email),
 			slog.String("domain", emailDomain))
-		return false, emailDomain, nil // false = not disposable = ALLOW
+		return true, emailDomain, nil // true = disposable = BLOCK
 	}
 
 	// Normal operation with data (might be old, but that's OK)

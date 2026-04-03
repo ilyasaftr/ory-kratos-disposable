@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/ilyasaftr/ory-kratos-disposable/internal/domain"
 	"github.com/joho/godotenv"
 )
 
@@ -15,6 +17,7 @@ type Config struct {
 	Sentry   SentryConfig
 	ListURLs []string `env:"DISPOSABLE_LIST_URLS" envSeparator:"," envDefault:"https://cdn.jsdelivr.net/gh/ilyasaftr/disposable-email-domains@main/lists/deny.txt"`
 	Refresh  RefreshConfig
+	Failure  FailureConfig
 }
 
 type ServerConfig struct {
@@ -31,6 +34,10 @@ type LoggerConfig struct {
 
 type RefreshConfig struct {
 	Interval time.Duration `env:"DISPOSABLE_LIST_UPDATE_INTERVAL" envDefault:"30m"`
+}
+
+type FailureConfig struct {
+	Mode domain.FailureMode `env:"DISPOSABLE_FAILURE_MODE" envDefault:"open"`
 }
 
 type SentryConfig struct {
@@ -51,6 +58,18 @@ func Load() (*Config, error) {
 	cfg := &Config{}
 	if err := env.Parse(cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	if cfg.Refresh.Interval <= 0 {
+		return nil, fmt.Errorf("DISPOSABLE_LIST_UPDATE_INTERVAL must be greater than 0")
+	}
+
+	cfg.Failure.Mode = domain.FailureMode(strings.ToLower(strings.TrimSpace(cfg.Failure.Mode.String())))
+	switch cfg.Failure.Mode {
+	case domain.FailureModeOpen, domain.FailureModeClosed:
+		// valid
+	default:
+		return nil, fmt.Errorf("DISPOSABLE_FAILURE_MODE must be either 'open' or 'closed'")
 	}
 
 	return cfg, nil
