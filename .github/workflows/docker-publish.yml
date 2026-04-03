@@ -1,0 +1,196 @@
+name: docker-publish
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  GO_VERSION: "1.26"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+  prepare:
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tags: ${{ steps.meta.outputs.tags }}
+      do_push: ${{ steps.meta.outputs.do_push }}
+    steps:
+      - name: Compute image metadata
+        id: meta
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          SHA_TAG="${IMAGE}:sha-${GITHUB_SHA}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            DO_PUSH="false"
+            TAGS="${SHA_TAG}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            DO_PUSH="true"
+            VERSION_TAG="${IMAGE}:${GITHUB_REF_NAME}"
+            TAGS="${SHA_TAG},${VERSION_TAG}"
+          else
+            DO_PUSH="true"
+            BRANCH="${GITHUB_REF_NAME//\//-}"
+            BRANCH_TAG="${IMAGE}:${BRANCH}"
+            LATEST_TAG="${IMAGE}:latest"
+            TAGS="${SHA_TAG},${BRANCH_TAG}"
+            if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              TAGS="${TAGS},${LATEST_TAG}"
+            fi
+          fi
+
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "do_push=${DO_PUSH}" >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: needs.prepare.outputs.do_push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build per-arch image (PR validation)
+        if: needs.prepare.outputs.do_push != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: Build and push per-arch image by digest
+        if: needs.prepare.outputs.do_push == 'true'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: ${{ needs.prepare.outputs.do_push == 'true' }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+          tags: ${{ needs.prepare.outputs.image }}:build-${{ github.sha }}-${{ matrix.arch }}
+
+      - name: Export digest
+        if: needs.prepare.outputs.do_push == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}.txt"
+
+      - name: Upload digest artifact
+        if: needs.prepare.outputs.do_push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}.txt
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.do_push == 'true'
+    steps:
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Merge and create multi-arch manifests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          AMD_DIGEST="$(cat /tmp/digests/digest-amd64/amd64.txt)"
+          ARM_DIGEST="$(cat /tmp/digests/digest-arm64/arm64.txt)"
+
+          IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+          for tag in "${TAG_ARRAY[@]}"; do
+            docker buildx imagetools create \
+              -t "$tag" \
+              "${IMAGE}@${AMD_DIGEST}" \
+              "${IMAGE}@${ARM_DIGEST}"
+          done
+
+      - name: Show resulting manifests
+        env:
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+          for tag in "${TAG_ARRAY[@]}"; do
+            docker buildx imagetools inspect "$tag"
+          done
